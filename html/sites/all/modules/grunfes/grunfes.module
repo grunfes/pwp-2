@@ -47,6 +47,14 @@ function grunfes_menu() {
     'type' => MENU_CALLBACK,
   ];
 
+  $items['picks-administration/%/save'] = [
+    'title' => t('Pick Aministration Match'),
+    'page callback' => ['grunfes_admin_pick_save'],
+    'page arguments' => [1],
+    'access callback' => 'grunfes_admin_pick_save_access',
+    'type' => MENU_CALLBACK,
+  ];
+
   return $items;
 }
 
@@ -1014,7 +1022,7 @@ function grunfes_get_show_from_pool($pool_id) {
   $pool = node_load($pool_id);
 
   if ($pool !== NULL && isset($pool->field_matches_to_pick['und'][0]['target_id'])) {
-      $match_id = $pool->field_matches_to_pick['und'][0]['target_id'];
+    $match_id = $pool->field_matches_to_pick['und'][0]['target_id'];
 
     $query = new EntityFieldQuery();
     $query
@@ -1092,4 +1100,61 @@ function grunfes_node_presave($node) {
       }
     }
   }
+}
+
+function grunfes_admin_pick_save($match_id = -1) {
+  extract($_POST, EXTR_OVERWRITE);
+
+  $match_node = node_load($match_id);
+
+  if (!$match_node || !isset($redirectUrl) || !isset($pool_id) || !isset($_POST["match_{$match_id}"])) {
+    drupal_goto('/');
+  }
+
+  $team_picked = $_POST["match_{$match_id}"];
+  $pool_ids = grunfes_get_pools_from_match($match_id);
+
+  foreach ($pool_ids as $pool_id) {
+
+    // Get administrator pick for a given pool and match.
+    $query = new EntityFieldQuery();
+    $query
+      ->entityCondition('entity_type', 'node')
+      ->entityCondition('bundle', 'user_pick')
+      ->propertyCondition('uid', 1)
+      ->fieldCondition('field_pool_id', 'value', $pool_id)
+      ->fieldCondition('field_match_id', 'value', $match_id);
+    $result = $query->execute();
+
+    if (!empty($result)) {
+      $result_ids = array_keys($result['node']);
+      $pick_id = array_shift($result_ids);
+      $pick = node_load($pick_id);
+      $pick_entity = entity_metadata_wrapper('node', $pick);
+      $pick_entity->field_team_picked->set($team_picked);
+      $pick_entity->save();
+    }
+    else {
+      $pool = node_load($pool_id);
+      $new_pick = entity_create('node', array(
+        'type' => 'user_pick',
+        'uid' => 1,
+        'status' => NODE_PUBLISHED,
+        'title' => 'admin-' . $pool->title . '-' . $match_id,
+      ));
+
+      $new_pick_entity = entity_metadata_wrapper('node', $new_pick);
+      $new_pick_entity->field_team_picked->set($team_picked);
+      $new_pick_entity->field_match_id->set($match_id);
+      $new_pick_entity->field_pool_id->set($pool_id);
+      $new_pick_entity->save();
+    }
+  }
+
+  drupal_set_message(t('Pick saved.'));
+  drupal_goto($_POST['redirectUrl']);
+}
+
+function grunfes_admin_pick_save_access() {
+  return is_user_administrator();
 }
