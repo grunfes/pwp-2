@@ -11,6 +11,8 @@ const GRUNFES_PICK_LOCK_UP = [
 const GRUNFES_SKIP_PICK_VALUE = 'skip';
 const GRUNFES_SKIP_PICK_TEXT = 'Skip';
 
+const GRUNFES_TEAM_KEYS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
+
 function grunfes_menu() {
   $items = [];
 
@@ -316,7 +318,11 @@ function grunfes_pick_pool($pool_id) {
   }
 
   $results = grunfes_get_user_picks_by_pool($user->uid, $pool_id);
-  $is_new_pick = count($results) === 0;
+
+  $picks = entity_load('node', $results);
+  $prev = array_map(function ($pick) {
+    return $pick->field_match_id['und'][0]['value'];
+  }, $picks);
 
   if (!og_is_member('node', $pool_id)) {
     drupal_set_message(
@@ -326,8 +332,6 @@ function grunfes_pick_pool($pool_id) {
     drupal_goto($_POST['redirectUrl']);
   }
 
-  $count = 0;
-
   foreach ($post_data as $key => $value) {
     if (strpos($key, 'match') === FALSE) {
       continue;
@@ -335,7 +339,17 @@ function grunfes_pick_pool($pool_id) {
 
     $match_id = explode('_', $key)[1];
 
-    if ($is_new_pick) {
+    if (in_array($match_id, $prev)) {
+      $pick_id = array_search($match_id, $prev);
+      $pick = node_load($pick_id);
+
+      if ($pick) {
+        $pick_entity = entity_metadata_wrapper('node', $pick);
+        $pick_entity->field_team_picked = $value;
+        $pick_entity->save();
+      }
+    }
+    else {
       $pick = entity_create('node', [
         'type' => 'user_pick',
       ]);
@@ -347,22 +361,8 @@ function grunfes_pick_pool($pool_id) {
       $pick_entity->field_match_id = $match_id;
       $pick_entity->field_team_picked = $value;
       $pick_entity->save();
-
-      // Do we need this?
-      // $user_entity->field_picks[] = $pick_entity->nid->value();
+      $user_entity->save();
     }
-    else {
-      $pick = node_load($results[$count]);
-      $pick_entity = entity_metadata_wrapper('node', $pick);
-      $pick_entity->field_team_picked = $value;
-      $pick_entity->save();
-    }
-
-    $count++;
-  }
-
-  if ($is_new_pick) {
-    $user_entity->save();
   }
 
   drupal_set_message(t('Your picks has been saved'));
@@ -638,7 +638,7 @@ function grunfes_render_match($name, $value, $text, $is_checked, $is_disabled) {
 
 
   $class = sprintf(
-    'left p5 %s',
+    'left p5 field-type-entityreference %s',
     $value === GRUNFES_SKIP_PICK_VALUE
       ? 'skip'
       : ''
