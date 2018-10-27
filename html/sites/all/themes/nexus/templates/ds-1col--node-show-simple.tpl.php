@@ -17,7 +17,6 @@ $redirect_url = drupal_get_path_alias(current_path());
 $is_member = og_is_member('node', $pool_id);
 
 $show_id = $nid;
-
 ?>
   <<?php print $ds_content_wrapper;
 print $layout_attributes; ?> class="ds-1col <?php print $classes; ?> clearfix">
@@ -31,10 +30,11 @@ print $layout_attributes; ?> class="ds-1col <?php print $classes; ?> clearfix">
     <?php print $ds_content; ?>
     <input type="hidden" name="redirectUrl"
            value="<?php echo $redirect_url; ?>"/>
-    <?php if ($is_member): ?>
+    <?php if ($is_member && (is_user_administrator() || $_SESSION['show_expired'] !== TRUE)): ?>
       <input type="hidden" name="show_id" value="<?php echo $show_id; ?>" />
       <input type="submit" value="<?php echo t('Save Picks'); ?>"/>
     <?php endif; ?>
+    <?php unset($_SESSION['show_expired']); ?>
   </form>
 
   </<?php print $ds_content_wrapper ?>>

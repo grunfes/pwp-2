@@ -404,13 +404,56 @@ function grunfes_publish_pick($pool_id) {
   $admin_mitb_pick = grunfes_mitb_get_user_pick($pool_id, 1);
   $pool_users = $pool_entity->members->value();
 
+  $admin_pick_entities = entity_load('node', $admin_picks);
+  $pool_shows = $pool_entity->field_shows_to_pick->value();
+
+  $winning_picks = array();
+
+  try {
+    foreach ($pool_shows as $pool_show) {
+      if (property_exists($pool_show, 'field_matches') && !empty($pool_show->field_matches['und'])) {
+        $show_match_ids = array_column($pool_show->field_matches['und'], 'target_id');
+        $show_matches = entity_load('node', $show_match_ids);
+
+        $winning_picks[$pool_show->nid] = array(
+          'ppv_bonus' => $pool_show->field_perfect_ppv_bonus['und'][0]['value'],
+          'matches' => array(),
+        );
+
+        foreach ($show_matches as $show_match) {
+
+          $admin_picked_entity = NULL;
+          foreach ($admin_pick_entities as $admin_pick_entity) {
+            if ($show_match->nid == $admin_pick_entity->field_match_id['und'][0]['value']) {
+              $admin_picked_entity = $admin_pick_entity;
+              break;
+            }
+          }
+
+          if ($admin_picked_entity === NULL) {
+            throw new \Exception('Not all matches have picks.');
+          }
+
+          $winning_picks[$pool_show->nid]['matches'][$show_match->nid] = array(
+            'point_to_earn' => $show_match->field_point_to_earn['und'][0]['value'],
+            'result' => $admin_picked_entity->field_team_picked['und'][0]['value'],
+          );
+        }
+      }
+    }
+  } catch (\Exception $ex) {
+    drupal_set_message($ex->getMessage());
+    drupal_goto($redirect_url);
+    return;
+  }
+
   foreach ($pool_users as $pool_user) {
     if (in_array('administrator', $pool_user->roles)) {
       continue;
     }
 
     $user_picks = grunfes_get_user_picks_by_pool($pool_user->uid, $pool_id);
-    $user_points = grunfes_calculate_pick_points($admin_picks, $user_picks);
+    $user_points = grunfes_calculate_pick_points($winning_picks, $user_picks);
 
     if (grunfes_check_mitb($pool_id, $out) && $admin_mitb_pick !== NULL) {
       $user_mitb_pick = grunfes_mitb_get_user_pick($pool_id, $pool_user->uid);
@@ -449,45 +492,40 @@ function grunfes_publish_pick($pool_id) {
   drupal_goto($redirect_url);
 }
 
-function grunfes_calculate_pick_points($admin_picks, $user_picks) {
+function grunfes_calculate_pick_points($shows, $user_picks) {
   if (count($user_picks) === 0) {
     return 0;
   }
 
   $points = 0;
-  $all_hits = TRUE;
 
-  foreach ($admin_picks as $index => $value) {
-    $admin_pick = node_load($value);
-    $user_pick = node_load($user_picks[$index]);
+  $user_pick_entities = entity_load('node', $user_picks);
+  $user_picks = array();
 
-    if ($user_pick === FALSE) {
-      $all_hits = FALSE;
-      $points = 0;
-      break;
-    }
-
-    $match = node_load($admin_pick->field_match_id['und'][0]['value']);
-    $points_to_earn = intval($match->field_point_to_earn['und'][0]['value']);
-
-    if (
-      isset($admin_pick->field_team_picked['und'][0]['safe_value']) &&
-      isset($user_pick->field_team_picked['und'][0]['safe_value'])
-    ) {
-      if (
-        $admin_pick->field_team_picked['und'][0]['safe_value'] ==
-        $user_pick->field_team_picked['und'][0]['safe_value']
-      ) {
-        $points += $points_to_earn;
-      }
-      else {
-        $all_hits = FALSE;
-      }
-    }
+  foreach ($user_pick_entities as $user_pick_entity) {
+    $user_picks[$user_pick_entity->field_match_id['und'][0]['value']] = $user_pick_entity->field_team_picked['und'][0]['value'];
   }
 
-  if ($all_hits) {
-    $points += 50;
+  foreach ($shows as &$show) {
+
+    foreach ($show['matches'] as $match_id => $value) {
+      if (array_key_exists($match_id, $user_picks)) {
+        $user_pick = $user_picks[$match_id];
+
+        if ($user_pick === $value['result']) {
+          $points += $value['point_to_earn'];
+          $show['matches'][$match_id]['equal'] = TRUE;
+        }
+      }
+    }
+
+    $has_ppv = array_reduce($show['matches'], function ($carry, $item) {
+      return $carry && array_key_exists('equal', $item) && $item['equal'] === TRUE;
+    }, TRUE);
+
+    if ($has_ppv) {
+      $points += $show['ppv_bonus'];
+    }
   }
 
   return $points;
