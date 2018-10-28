@@ -31,6 +31,14 @@ function grunfes_menu() {
     'type' => MENU_CALLBACK,
   ];
 
+  $items['publish_show'] = [
+    'title' => t('Publish show'),
+    'page arguments' => [1],
+    'page callback' => 'grunfes_publish_show',
+    'access arguments' => ['access content'],
+    'type' => MENU_CALLBACK,
+  ];
+
   $items['node/%/reset'] = [
     'title' => t('Reset pool'),
     'page callback' => 'drupal_get_form',
@@ -131,12 +139,13 @@ function grunfes_reset_pool_submit(&$form, $form_state) {
     }
   }
 
+  $pool = node_load($gid);
+  
+
+  drupal_set_message('Pool has been reset succesfully.');
   drupal_goto(
     drupal_get_path_alias("node/{$gid}")
   );
-
-  drupal_set_message('Pool has been reset succesfully.');
-
 }
 
 function grunfes_reset_pool_access($group_type, $gid) {
@@ -302,6 +311,43 @@ function grunfes_get_user_picks_by_pool($user_id, $pool_id) {
 function grunfes_pick_pool($pool_id) {
   global $user;
 
+  $show_id = isset($_POST['show_id']) ? $_POST['show_id'] : NULL;
+  $redirectUrl = isset($_POST['redirectUrl']) ? $_POST['redirectUrl'] : '/';
+
+  if ($show_id === NULL) {
+    drupal_goto('/');
+  }
+
+  // Admin saves winning teams.
+  if (is_user_editor($user)) {
+    $show = node_load($show_id);
+
+    if ($show && !empty($show->field_matches['und'])) {
+      $matches = entity_load(
+        'node',
+        array_column($show->field_matches['und'], 'target_id')
+      );
+
+      foreach ($matches as $match) {
+        $value_key = "match_{$match->nid}";
+        $value = isset($_POST[$value_key])
+          ? $_POST[$value_key]
+          : NULL;
+
+        if (empty($value)) {
+          continue;
+        }
+
+        $ewrapper = entity_metadata_wrapper('node', $match);
+        $ewrapper->field_team_picked->set($value);
+        $ewrapper->save();
+      }
+    }
+
+    drupal_set_message('Winning picks saved.');
+    drupal_goto($redirectUrl);
+  }
+
   $post_data = $_POST;
 
   if (!isset($post_data['redirectUrl'])) {
@@ -365,8 +411,8 @@ function grunfes_pick_pool($pool_id) {
     }
   }
 
-  drupal_set_message(t('Your picks has been saved'));
-  drupal_goto($_POST['redirectUrl']);
+  drupal_set_message(t('Your picks have been saved.'));
+  drupal_goto($redirectUrl);
 
   return [];
 }
@@ -394,7 +440,6 @@ function grunfes_publish_pick($pool_id) {
     drupal_set_message('Picks already published.');
     drupal_goto($redirect_url);
   }
-
 
   $pool_entity = entity_metadata_wrapper('node', $pool);
   $pool_entity->field_closed = TRUE;
@@ -492,6 +537,119 @@ function grunfes_publish_pick($pool_id) {
   drupal_goto($redirect_url);
 }
 
+function grunfes_publish_show($show_id) {
+  global $user;
+
+  $show = node_load($show_id);
+  $redirectUrl = isset($_POST['redirectUrl'])
+    ? $_POST['redirectUrl']
+    : '/';
+
+  if (!is_user_editor($user) || !$show || empty($show->field_matches['und'])) {
+    drupal_goto($redirectUrl);
+    return [];
+  }
+
+  if (isset($show->field_published['und'][0]['value']) && $show->field_published['und'][0]['value'] === '1') {
+    drupal_set_message('Show already published.');
+    drupal_goto($redirectUrl);
+    return [];
+  }
+
+  $query = new EntityFieldQuery();
+  $query
+    ->entityCondition('entity_type', 'node')
+    ->entityCondition('bundle', 'pool')
+    ->fieldCondition('field_shows_to_pick', 'target_id', $show_id);
+  $result = $query->execute();
+
+  if (!empty($result['node'])) {
+    $pool_ids = array_keys($result['node']);
+    $pools = entity_load('node', $pool_ids);
+
+    foreach ($pools as $pool) {
+      $pool_entity = entity_metadata_wrapper('node', $pool);
+      $pool_users = $pool_entity->members->value();
+
+      foreach ($pool_users as $pool_user) {
+        if (is_user_editor($pool_user)) {
+          continue;
+        }
+
+        $user_picks = grunfes_get_user_picks_by_pool($pool_user->uid, $pool->nid);
+        $user_points = grunfes_calculate_show_points($show, $user_picks);
+
+        $query = new EntityFieldQuery();
+        $query
+          ->entityCondition('entity_type', 'leaderboard_score')
+          ->entityCondition('bundle', 'leaderboard_score')
+          ->fieldCondition('field_user', 'target_id', $pool_user->uid)
+          ->fieldCondition('field_pool_id', 'value', $pool->nid);
+        $result = $query->execute();
+
+        $score_entity = NULL;
+        if (!empty($result['leaderboard_score'])) {
+          $entities = entity_load('leaderboard_score', array_keys($result['leaderboard_score']));
+          $score_entity = entity_metadata_wrapper('leaderboard_score', array_pop($entities));
+          $user_points += $score_entity->field_score->value();
+          $score_entity->field_score->set($user_points);
+        }
+        else {
+          $score = entity_create('leaderboard_score', [
+            'type' => 'leaderboard_score',
+          ]);
+          $score_entity = entity_metadata_wrapper('leaderboard_score', $score);
+          $score_entity->field_user->set($pool_user->uid);
+          $score_entity->field_score->set($user_points);
+          $score_entity->field_pool_id->set($pool->nid);
+          $score_entity->field_pool_name->set($pool->title);
+        }
+
+        $score_entity->save();
+        drupal_set_message("User {$pool_user->name} earned {$user_points} points.");
+      }
+    }
+  }
+
+  $show_entity = entity_metadata_wrapper('node', $show);
+  $show_entity->field_published->set(TRUE);
+  $show_entity->save();
+
+  drupal_set_message('Show results published.');
+}
+
+function grunfes_calculate_show_points($show, $user_pick_ids) {
+  if (count($user_pick_ids) === 0) {
+    return 0;
+  }
+
+  $points = 0;
+
+  $show_match_ids = array_column($show->field_matches['und'], 'target_id');
+  $show_matches = entity_load('node', $show_match_ids);
+
+  $user_picks = entity_load('node', $user_pick_ids);
+  $user_win_count = 0;
+
+  foreach ($user_picks as $user_pick) {
+    $user_match_id = $user_pick->field_match_id['und'][0]['value'];
+    if (in_array($user_match_id, $show_match_ids)) {
+      $show_match = $show_matches[$user_match_id];
+
+      if ($user_pick->field_team_picked['und'][0]['value'] === $show_match->field_team_picked['und'][0]['value']) {
+        $points += $show_match->field_point_to_earn['und'][0]['value'];
+        $user_win_count += 1;
+      }
+    }
+  }
+
+  if (count($show_match_ids) === $user_win_count) {
+    $points += $show->field_perfect_ppv_bonus['und'][0]['value'];
+  }
+
+  return $points;
+}
+
 function grunfes_calculate_pick_points($shows, $user_picks) {
   if (count($user_picks) === 0) {
     return 0;
@@ -531,28 +689,16 @@ function grunfes_calculate_pick_points($shows, $user_picks) {
   return $points;
 }
 
-//function grunfes_reset_pool($admin_picks, $user_picks) {
-//  if (count($user_picks) === 0) {
-//    return 0;
-//  }
-//
-//  $points = 0;
-//  $all_hits = TRUE;
-//
-//  foreach ($admin_picks as $index => $value) {
-//    $admin_pick = node_load($value);
-//    $user_pick = node_load($user_picks[$index]);
-//
-//    $all_hits = FALSE;
-//    $points = 0;
-//    break;
-//  }
-//
-//
-//  return $points;
-//}
-
 function grunfes_fetch_pick($user_id, $pool_id, $match_id) {
+  $user = user_load($user_id);
+
+  if (is_user_editor($user)) {
+    $match = node_load($match_id);
+    $ewrapper = entity_metadata_wrapper('node', $match);
+    $value = $ewrapper->field_team_picked->value();
+    return $value;
+  }
+
   $query = db_select('node', 'n')
     ->condition('n.uid', $user_id)
     ->condition('fpid.field_pool_id_value', $pool_id)
@@ -571,33 +717,34 @@ function grunfes_fetch_pick($user_id, $pool_id, $match_id) {
 function grunfes_render_matches($pool_id, $fields) {
   global $user;
 
-  $pool = node_load($pool_id);
-  $pool_locked = boolval($pool->field_closed['und'][0]['value']);
-  $pick_lock_up = $pool->field_pick_lockup['und'][0]['value'];
-
+  $date_expired = TRUE;
   $team_keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
   $html = '';
-  $date_expired = TRUE;
-
   $match_id = $fields['field_team_a']->raw;
   $results = grunfes_fetch_pick($user->uid, $pool_id, $match_id);
 
-  if (!$pool_locked) {
-    $match_entity = entity_metadata_wrapper('node', $match_id);
-    $match_timestamp = intval($match_entity->field_start_date->value());
+  if ($pool_id !== NULL) {
+    $pool = node_load($pool_id);
+    $pool_locked = boolval($pool->field_closed['und'][0]['value']);
+    $pick_lock_up = $pool->field_pick_lockup['und'][0]['value'];
 
-    $now = new DateObject('now');
-    $match_date = new DateObject();
-    $match_date->setTimestamp($match_timestamp);
-    $match_date->add(
-      DateInterval::createFromDateString(
-        GRUNFES_PICK_LOCK_UP[$pick_lock_up]));
+    if (!$pool_locked) {
+      $match_entity = entity_metadata_wrapper('node', $match_id);
+      $match_timestamp = intval($match_entity->field_start_date->value());
 
-    if ($pick_lock_up === GRUNFES_PICK_LOCK_UP_NIGHTBEFORE) {
-      $match_date->setTime('23', '59');
+      $now = new DateObject('now');
+      $match_date = new DateObject();
+      $match_date->setTimestamp($match_timestamp);
+      $match_date->add(
+        DateInterval::createFromDateString(
+          GRUNFES_PICK_LOCK_UP[$pick_lock_up]));
+
+      if ($pick_lock_up === GRUNFES_PICK_LOCK_UP_NIGHTBEFORE) {
+        $match_date->setTime('23', '59');
+      }
+
+      $date_expired = $now->getTimestamp() >= $match_date->getTimestamp();
     }
-
-    $date_expired = $now->getTimestamp() >= $match_date->getTimestamp();
   }
 
   if ($date_expired) {
@@ -607,22 +754,22 @@ function grunfes_render_matches($pool_id, $fields) {
   $is_disabled = $date_expired || $pool_id === FALSE || !og_is_member('node', $pool_id);
 
   foreach ($team_keys as $index => $value) {
-    if (isset($fields["field_team_{$value}"]->content)) {
+    if (isset($fields["field_team_{$value}"]->value)) {
       $team = $fields["field_team_{$value}"];
-      $is_checked = $results === $team->content;
+      $is_checked = $results === $team->value;
 
-      if (is_user_administrator()) {
+      if (is_user_editor($user)) {
         $is_disabled = FALSE;
       }
 
-      if ($results === FALSE && $index === 0) {
-        $is_checked = TRUE;
-      }
+      //      if (($results === FALSE || $results === NULL) && $index === 0) {
+      //        $is_checked = TRUE;
+      //      }
 
       $html .= grunfes_render_match(
         $team->raw,
-        $team->content,
-        $team->content,
+        $team->value,
+        $team->text,
         $is_checked,
         $is_disabled
       );
@@ -1195,4 +1342,31 @@ function grunfes_admin_pick_save($match_id = -1) {
 
 function grunfes_admin_pick_save_access() {
   return is_user_administrator();
+}
+
+function can_show_be_published($show_id) {
+  global $user;
+  $uid = $user->uid;
+
+  $show = node_load($show_id);
+  $can_publish = FALSE;
+
+  if (!empty($show->field_matches['und'])) {
+    $match_ids = array_column($show->field_matches['und'], 'target_id');
+
+    $can_publish = array_reduce($match_ids, function ($carry, $id) use ($uid) {
+      $pick = grunfes_fetch_pick($uid, NULL, $id);
+      return $carry && $pick !== FALSE && $pick !== NULL;
+    }, TRUE);
+  }
+
+  return $can_publish;
+}
+
+function is_user_editor($user) {
+
+  return !empty(array_intersect(array(
+    'administrator',
+    'score editor',
+  ), $user->roles));
 }

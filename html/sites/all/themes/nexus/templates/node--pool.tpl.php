@@ -79,6 +79,7 @@
  * @see template_process()
  */
 
+global $user;
 $pool_id = $node->nid;
 $pool_locked = boolval($node->field_closed['und'][0]['value']);
 $redirect_url = drupal_get_path_alias(current_path());
@@ -86,26 +87,27 @@ $is_member = og_is_member('node', $pool_id);
 ?>
 
 <?php if (!$page): ?>
-  <article id="node-<?php print $node->nid; ?>" class="<?php print $classes; ?> clearfix"<?php print $attributes; ?>>
-<?php endif; ?>
-<?php if (!$page): ?>
+<article id="node-<?php print $node->nid; ?>"
+         class="<?php print $classes; ?> clearfix"<?php print $attributes; ?>>
+  <?php endif; ?>
+  <?php if (!$page): ?>
   <header>
-<?php endif; ?>
-<?php print render($title_prefix); ?>
-<?php if (!$page): ?>
-  <h2 class="title" <?php print $title_attributes; ?>><a
-      href="<?php print $node_url; ?>"><?php print $title; ?></a></h2>
-<?php endif; ?>
-<?php print render($title_suffix); ?>
+    <?php endif; ?>
+    <?php print render($title_prefix); ?>
+    <?php if (!$page): ?>
+      <h2 class="title" <?php print $title_attributes; ?>><a
+          href="<?php print $node_url; ?>"><?php print $title; ?></a></h2>
+    <?php endif; ?>
+    <?php print render($title_suffix); ?>
 
-<?php if ($display_submitted): ?>
-  <ul class="meta clearfix">
-    <li><strong>Posted on:</strong> <?php print $date; ?></li>
-    <li><strong>By:</strong> <?php print $name; ?></li>
-  </ul>
-<?php endif; ?>
+    <?php if ($display_submitted): ?>
+      <ul class="meta clearfix">
+        <li><strong>Posted on:</strong> <?php print $date; ?></li>
+        <li><strong>By:</strong> <?php print $name; ?></li>
+      </ul>
+    <?php endif; ?>
 
-<?php if (!$page): ?>
+    <?php if (!$page): ?>
   </header>
 <?php endif; ?>
 
@@ -116,24 +118,15 @@ $is_member = og_is_member('node', $pool_id);
     hide($content['links']);
     print render($content);
     ?>
-
-    <?php if (is_user_administrator()): ?>
-      <form action="<?php echo "/publish_picks/{$pool_id}"; ?>"
-            method="POST">
-        <input type="hidden" name="redirectUrl"
-               value="<?php echo $redirect_url; ?>"/>
-        <input type="submit" value="<?php echo t('Publish Picks'); ?>"/>
-      </form>
-    <?php endif; ?>
   </div>
 
-<?php if (!empty($content['links'])): ?>
-  <footer>
-    <?php print render($content['links']); ?>
-  </footer>
-<?php endif; ?>
+  <?php if (!empty($content['links'])): ?>
+    <footer>
+      <?php print render($content['links']); ?>
+    </footer>
+  <?php endif; ?>
 
-<?php print render($content['comments']); ?>
-<?php if (!$page): ?>
-  </article> <!-- /.node -->
+  <?php print render($content['comments']); ?>
+  <?php if (!$page): ?>
+</article> <!-- /.node -->
 <?php endif; ?>

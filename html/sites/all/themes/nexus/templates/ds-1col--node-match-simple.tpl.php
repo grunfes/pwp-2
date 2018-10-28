@@ -5,6 +5,7 @@
  * Display Suite 1 column template.
  */
 
+global $user;
 $pool_id = NULL;
 $node_type = NULL;
 if ($node = menu_get_object()) {
@@ -22,7 +23,7 @@ print $layout_attributes; ?> class="ds-1col <?php print $classes; ?> clearfix">
 <?php endif; ?>
 
 <?php
-if ($pool_id !== NULL && $node_type === 'pool') {
+if ($pool_id !== NULL && $node_type === 'pool' || is_user_editor($user)) {
   if (isset($content['group_matches'])) {
     unset($content['group_matches']);
   }
@@ -31,10 +32,20 @@ if ($pool_id !== NULL && $node_type === 'pool') {
   foreach (GRUNFES_TEAM_KEYS as $team_key) {
     $key = "field_team_${team_key}";
     $team_var = ${$key};
+
     if (isset($team_var) && !empty($team_var)) {
+      $team_members = array_map(function ($obj) {
+        return '<span>' . $obj['entity']->title . '</span>';
+      }, $team_var);
+
+      $text = join('', $team_members);
+
+      $value = base64_encode(serialize(array_column($team_var, 'target_id')));
+
       $fields[$key] = (object) array(
         'raw' => $nid,
-        'content' => $team_var[0]['entity']->title,
+        'value' => $value,
+        'text' => $text,
       );
     }
   }
